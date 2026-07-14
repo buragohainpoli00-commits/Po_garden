@@ -1,0 +1,6 @@
+{
+  "name": "Sprout Journal",
+  "description": "A beautiful, organic plant care journal and tracking application to log, water, and nurture your house plants, or honor them in the botanical graveyard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
