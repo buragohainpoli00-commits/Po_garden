@@ -4,8 +4,9 @@
  */
 
 import React, { useState, useRef } from 'react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Plant, CareLog } from '../types';
+import CameraCapture from './CameraCapture';
 
 interface AddPlantViewProps {
   key?: React.Key;
@@ -57,7 +58,78 @@ export default function AddPlantView({ onAddPlant, onCancel }: AddPlantViewProps
   const [dragActive, setDragActive] = useState(false);
   const [formError, setFormError] = useState('');
 
+  // VisionAI states
+  const [showCamera, setShowCamera] = useState(false);
+  const [identifying, setIdentifying] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Reusable VisionAI scanner function
+  const runVisionAIScan = async (base64Image: string) => {
+    setIdentifying(true);
+    setFormError('');
+
+    try {
+      const response = await fetch('http://localhost:3001/api/identify-plant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64Image }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || 'Failed to identify plant.');
+      }
+
+      const data = await response.json();
+      if (data.name) setName(data.name);
+      if (data.species) setSpecies(data.species);
+      if (data.thirstLevel) setThirstLevel(Number(data.thirstLevel));
+      if (data.difficulty) setDifficulty(data.difficulty as 'easy' | 'medium' | 'hard');
+      if (data.about) setAbout(data.about);
+
+    } catch (err: any) {
+      console.error('VisionAI Scan Error:', err);
+      setFormError(`VisionAI Scan failed: ${err.message || 'Make sure your backend proxy server is running.'}`);
+    } finally {
+      setIdentifying(false);
+    }
+  };
+
+  // Permanently re-encode any uploaded image through an HTML canvas to a
+  // clean image/png data URL. This eliminates corrupt JPEG blobs, HEIC files,
+  // and any format the Anthropic API refuses to accept.
+  const normalizeImageToCleanPNG = (rawDataUrl: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          // Limit max dimension to 1200px to keep payload small
+          const MAX = 1200;
+          let { width, height } = img;
+          if (width > MAX || height > MAX) {
+            if (width > height) {
+              height = Math.round((height / width) * MAX);
+              width = MAX;
+            } else {
+              width = Math.round((width / height) * MAX);
+              height = MAX;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d')!;
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/png'));
+        } catch (err) {
+          reject(err);
+        }
+      };
+      img.onerror = () => reject(new Error('Image could not be loaded for re-encoding'));
+      img.src = rawDataUrl;
+    });
+  };
 
   // File reading support for base64 uploading
   const handleFile = (file: File) => {
@@ -67,10 +139,17 @@ export default function AddPlantView({ onAddPlant, onCancel }: AddPlantViewProps
     }
     setFormError('');
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       if (e.target?.result && typeof e.target.result === 'string') {
-        setUploadedBase64(e.target.result);
-        setImageOption('upload');
+        try {
+          // Re-encode through canvas → guaranteed clean PNG before anything else
+          const cleanPNG = await normalizeImageToCleanPNG(e.target.result);
+          setUploadedBase64(cleanPNG);
+          setImageOption('upload');
+          runVisionAIScan(cleanPNG);
+        } catch {
+          setFormError('Could not process that image. Please try a different file.');
+        }
       }
     };
     reader.readAsDataURL(file);
@@ -98,6 +177,18 @@ export default function AddPlantView({ onAddPlant, onCancel }: AddPlantViewProps
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       handleFile(e.target.files[0]);
+    }
+  };
+
+  const handleCameraCapture = async (base64Image: string) => {
+    setShowCamera(false);
+    try {
+      const cleanPNG = await normalizeImageToCleanPNG(base64Image);
+      setUploadedBase64(cleanPNG);
+      setImageOption('upload');
+      runVisionAIScan(cleanPNG);
+    } catch {
+      setFormError('Could not process the camera snapshot. Please try again.');
     }
   };
 
@@ -158,21 +249,34 @@ export default function AddPlantView({ onAddPlant, onCancel }: AddPlantViewProps
           </div>
         )}
 
+        {/* VisionAI Scan Trigger Card */}
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            disabled={identifying}
+            onClick={() => setShowCamera(true)}
+            className="w-full py-3 bg-[#dee3b9]/30 hover:bg-[#dee3b9]/50 disabled:opacity-50 text-[#173124] border border-[#173124]/30 rounded-xl font-sans text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95 duration-700"
+          >
+            <span className="material-symbols-outlined text-base">photo_camera</span>
+            Scan Sprout with VisionAI
+          </button>
+        </div>
+
         {/* 1. Photo Block */}
         <div className="flex flex-col gap-2">
           <label className="font-sans text-xs font-semibold text-[#173124] uppercase tracking-wider">
             Plant Portrait
           </label>
 
-          <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-stretch">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-stretch">
             {/* Left box: Main preview & Dropzone */}
             <div
               onDragEnter={handleDrag}
               onDragOver={handleDrag}
               onDragLeave={handleDrag}
               onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={`sm:col-span-8 relative aspect-[4/3] rounded-xl overflow-hidden border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-all ${
+              onClick={() => !identifying && fileInputRef.current?.click()}
+              className={`sm:col-span-2 relative h-[280px] w-full rounded-xl overflow-hidden border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-all ${
                 dragActive 
                   ? 'border-[#173124] bg-[#dee3b9]/20' 
                   : 'border-[#c2c8c2] bg-[#f5f4ef] hover:bg-[#e3e3de]/50'
@@ -184,16 +288,26 @@ export default function AddPlantView({ onAddPlant, onCancel }: AddPlantViewProps
                 accept="image/*"
                 onChange={handleFileChange}
                 className="hidden"
+                disabled={identifying}
               />
+
+              {/* Dynamic Loading Overlay */}
+              {identifying && (
+                <div className="absolute inset-0 bg-[#1b1c19]/80 flex flex-col items-center justify-center text-[#ffffff] p-4 text-center z-20">
+                  <span className="animate-spin material-symbols-outlined text-3xl text-[#dee3b9] mb-2">cached</span>
+                  <span className="font-sans text-xs font-bold">Claude is identifying...</span>
+                  <span className="font-sans text-[10px] text-stone-400 mt-1 max-w-[200px]">Analyzing leaves, thirst index, and care guidelines</span>
+                </div>
+              )}
 
               {imageOption === 'upload' && uploadedBase64 ? (
                 <>
                   <img
                     src={uploadedBase64}
                     alt="Preview"
-                    className="w-full h-full object-cover"
+                    className="absolute inset-0 w-full h-full object-cover"
                   />
-                  <div className="absolute inset-0 bg-[#1b1c19]/30 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center text-[#ffffff] font-sans text-xs font-semibold">
+                  <div className="absolute inset-0 bg-[#1b1c19]/30 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center text-[#ffffff] font-sans text-xs font-semibold z-10">
                     <span className="material-symbols-outlined text-lg mr-1">photo_camera</span>
                     Change Photo
                   </div>
@@ -203,10 +317,10 @@ export default function AddPlantView({ onAddPlant, onCancel }: AddPlantViewProps
                   <img
                     src={selectedPresetUrl}
                     alt="Preset preview"
-                    className="w-full h-full object-cover opacity-90"
+                    className="absolute inset-0 w-full h-full object-cover opacity-90"
                     referrerPolicy="no-referrer"
                   />
-                  <div className="absolute inset-0 bg-[#1b1c19]/20 flex items-center justify-center">
+                  <div className="absolute inset-0 bg-[#1b1c19]/20 flex items-center justify-center z-10">
                     <span className="bg-[#ffffff]/90 text-[#173124] font-sans text-xs font-semibold px-3 py-1.5 rounded-full shadow-sm flex items-center gap-1">
                       <span className="material-symbols-outlined text-sm">photo_camera</span>
                       Tap to Upload Custom
@@ -223,7 +337,7 @@ export default function AddPlantView({ onAddPlant, onCancel }: AddPlantViewProps
             </div>
 
             {/* Right side: Presets chooser */}
-            <div className="sm:col-span-4 flex flex-col gap-2">
+            <div className="sm:col-span-1 flex flex-col gap-2">
               <span className="font-sans text-[10px] text-[#727973] font-semibold uppercase tracking-wider">
                 Preset Library
               </span>
@@ -232,6 +346,7 @@ export default function AddPlantView({ onAddPlant, onCancel }: AddPlantViewProps
                   <button
                     key={preset.name}
                     type="button"
+                    disabled={identifying}
                     onClick={() => {
                       setSelectedPresetUrl(preset.url);
                       setImageOption('preset');
@@ -275,22 +390,22 @@ export default function AddPlantView({ onAddPlant, onCancel }: AddPlantViewProps
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <label className="font-sans text-xs font-semibold text-[#173124]" htmlFor="plant-species">
-              Species / Type (Optional)
-            </label>
-            <input
-              id="plant-species"
-              type="text"
-              placeholder="What kind of plant is it? (e.g., Monstera Deliciosa)"
-              value={species}
-              onChange={(e) => setSpecies(e.target.value)}
-              className="w-full bg-transparent border-b-2 border-[#c2c8c2] focus:border-[#173124] font-sans text-sm text-[#1b1c19] py-2 focus:outline-none transition-colors placeholder:text-[#727973]"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
+              <label className="font-sans text-xs font-semibold text-[#173124]" htmlFor="plant-species">
+                Species / Type (Optional)
+              </label>
+              <input
+                id="plant-species"
+                type="text"
+                placeholder="What kind of plant is it? (e.g., Monstera Deliciosa)"
+                value={species}
+                onChange={(e) => setSpecies(e.target.value)}
+                className="w-full bg-transparent border-b-2 border-[#c2c8c2] focus:border-[#173124] font-sans text-sm text-[#1b1c19] py-2 focus:outline-none transition-colors placeholder:text-[#727973]"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5 justify-end">
               <label className="font-sans text-xs font-semibold text-[#173124]" htmlFor="plant-location">
                 Placement / Location
               </label>
@@ -298,7 +413,7 @@ export default function AddPlantView({ onAddPlant, onCancel }: AddPlantViewProps
                 id="plant-location"
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
-                className="w-full bg-[#f5f4ef] border border-[#c2c8c2] focus:border-[#173124] rounded-lg px-2.5 py-2 font-sans text-xs text-[#1b1c19] focus:outline-none"
+                className="w-full bg-[#f5f4ef] border border-[#c2c8c2] focus:border-[#173124] rounded-lg px-2.5 py-[10px] font-sans text-xs text-[#1b1c19] focus:outline-none"
               >
                 <option value="Living Room">Living Room</option>
                 <option value="Bedroom Window">Bedroom Window</option>
@@ -308,20 +423,20 @@ export default function AddPlantView({ onAddPlant, onCancel }: AddPlantViewProps
                 <option value="Balcony">Balcony</option>
               </select>
             </div>
+          </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label className="font-sans text-xs font-semibold text-[#173124]" htmlFor="plant-desc">
-                Bio Description
-              </label>
-              <input
-                id="plant-desc"
-                type="text"
-                placeholder="A short story or notes..."
-                value={about}
-                onChange={(e) => setAbout(e.target.value)}
-                className="w-full bg-transparent border-b-2 border-[#c2c8c2] focus:border-[#173124] font-sans text-sm text-[#1b1c19] py-2 focus:outline-none transition-colors placeholder:text-[#727973]"
-              />
-            </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="font-sans text-xs font-semibold text-[#173124]" htmlFor="plant-desc">
+              Bio Description
+            </label>
+            <textarea
+              id="plant-desc"
+              rows={3}
+              placeholder="A short story or notes..."
+              value={about}
+              onChange={(e) => setAbout(e.target.value)}
+              className="w-full bg-[#f5f4ef] border border-[#c2c8c2] focus:border-[#173124] rounded-lg px-3 py-2 font-sans text-sm text-[#1b1c19] focus:outline-none resize-none transition-colors placeholder:text-[#727973] min-h-[80px]"
+            />
           </div>
         </div>
 
@@ -420,6 +535,16 @@ export default function AddPlantView({ onAddPlant, onCancel }: AddPlantViewProps
           </button>
         </div>
       </form>
+
+      {/* Camera Capture Modal Panel */}
+      <AnimatePresence>
+        {showCamera && (
+          <CameraCapture
+            onCapture={handleCameraCapture}
+            onClose={() => setShowCamera(false)}
+          />
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
