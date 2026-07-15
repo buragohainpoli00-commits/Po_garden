@@ -66,7 +66,7 @@ Return a valid JSON object matching the following structure:
 Do not include any wrapping markdown formatting like \`\`\`json or extra text or explanations. Return ONLY the raw JSON object.`;
 
     const response = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-latest',
+      model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1000,
       messages: [
         {
@@ -111,6 +111,10 @@ Do not include any wrapping markdown formatting like \`\`\`json or extra text or
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Sprout Journal VisionAI Proxy running on port ${PORT}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Sprout Journal VisionAI Proxy running on port ${PORT}`);
+  });
+}
+
+export default app;
