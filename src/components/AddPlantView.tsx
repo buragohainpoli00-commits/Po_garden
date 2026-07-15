@@ -70,7 +70,8 @@ export default function AddPlantView({ onAddPlant, onCancel }: AddPlantViewProps
     setFormError('');
 
     try {
-      const response = await fetch('http://localhost:3001/api/identify-plant', {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const response = await fetch(`${apiUrl}/api/identify-plant`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: base64Image }),
